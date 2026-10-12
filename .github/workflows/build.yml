@@ -1,0 +1,42 @@
+name: Build Astral dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dylib
+        run: |
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p out
+          xcrun -sdk iphoneos clang++ \
+            -arch arm64 -mios-version-min=15.0 -isysroot "$SDK" \
+            -dynamiclib -install_name "@rpath/AstralCheat.dylib" \
+            -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
+            -fobjc-arc -std=c++17 -O2 \
+            -o out/AstralCheat.dylib Source/cheat.mm
+          xcrun -sdk iphoneos strip -x out/AstralCheat.dylib
+          file out/AstralCheat.dylib
+          ls -lh out/AstralCheat.dylib
+
+      - name: Sign
+        run: |
+          brew install ldid
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict>' '<key>platform-application</key><true/>' '<key>get-task-allow</key><true/>' '</dict></plist>' > /tmp/e.plist
+          ldid -S/tmp/e.plist out/AstralCheat.dylib
+
+      - name: Pack
+        run: cd out && zip -0 AstralCheat-dylib.zip AstralCheat.dylib && ls -lh AstralCheat-dylib.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AstralCheat-dylib
+          path: out/AstralCheat-dylib.zip
+          retention-days: 14
