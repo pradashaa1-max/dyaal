@@ -112,14 +112,57 @@ static void GameTick(){
     // When offsets known: read array of PlayerController*, fill gEnts, gLocal, gVM from Camera
 }
 
-static void MakeSecure(UIView*v){
-    if(!v||!gHideRec)return;
+// Reliable hide from screenshot / screen recording (secureTextEntry container)
+static UITextField*gSecureField=nil;
+static UIView*gSecureContainer=nil;
+
+static void ApplyCaptureHide(UIWindow*win, UIView*content, BOOL hide){
+    if(!win||!content)return;
+    if(hide){
+        if(!gSecureField){
+            gSecureField=[[UITextField alloc] initWithFrame:win.bounds];
+            gSecureField.secureTextEntry=YES;
+            gSecureField.userInteractionEnabled=NO;
+            gSecureField.backgroundColor=UIColor.clearColor;
+        }
+        gSecureField.frame=win.bounds;
+        if(gSecureField.superview!=win) [win addSubview:gSecureField];
+        // iOS puts secure content in a special view inside the text field
+        UIView*sec=nil;
+        for(UIView*v in gSecureField.subviews){
+            if(v.subviews.count||v.layer.sublayers.count){sec=v;break;}
+        }
+        if(!sec && gSecureField.subviews.count) sec=gSecureField.subviews.firstObject;
+        if(sec){
+            gSecureContainer=sec;
+            if(content.superview!=sec){
+                [content removeFromSuperview];
+                content.frame=sec.bounds;
+                content.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+                [sec addSubview:content];
+            }
+            sec.userInteractionEnabled=YES;
+        } else {
+            // fallback private API
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    SEL s=NSSelectorFromString(@"_setSecure:");
-    if([v respondsToSelector:s]) ((void(*)(id,SEL,BOOL))objc_msgSend)(v,s,YES);
+            SEL s=NSSelectorFromString(@"_setSecure:");
+            if([win respondsToSelector:s]) ((void(*)(id,SEL,BOOL))objc_msgSend)(win,s,YES);
+            if([content respondsToSelector:s]) ((void(*)(id,SEL,BOOL))objc_msgSend)(content,s,YES);
 #pragma clang diagnostic pop
-    for(UIView*c in v.subviews) MakeSecure(c);
+        }
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        SEL s=NSSelectorFromString(@"_setSecure:");
+        if([win respondsToSelector:s]) ((void(*)(id,SEL,BOOL))objc_msgSend)(win,s,NO);
+#pragma clang diagnostic pop
+        if(content.superview!=win.rootViewController.view){
+            [content removeFromSuperview];
+            content.frame=win.bounds;
+            [win.rootViewController.view addSubview:content];
+        }
+    }
 }
 
 @interface ACW:UIWindow @end
@@ -280,14 +323,14 @@ static ACW*gWin; static ACH*gHud;
         }
     }
     self.scroll.contentSize=CGSizeMake(self.scroll.bounds.size.width,y+16);
-    [self relabel]; MakeSecure(self.panel);
+    [self relabel]; 
 }
 - (void)onSw:(UISwitch*)s{
     int t=(int)s.superview.tag; BOOL v=s.on;
     switch(t){case 10:gAim=v;break;case 11:gFovDraw=v;break;case 12:gSilent=v;break;
         case 20:gEsp=v;break;case 21:gBox=v;break;case 22:gName=v;break;case 23:gHP=v;break;
         case 24:gDist=v;break;case 25:gSnap=v;break;case 26:gTeam=v;break;
-        case 30:gHideRec=v;MakeSecure(gWin);MakeSecure(self);break;}
+        case 30:gHideRec=v;ApplyCaptureHide(gWin,self,gHideRec);break;}
     SaveCfgNamed(gCfgName);
 }
 - (void)onFov:(UISlider*)sl{gFov=sl.value; UILabel*l=[sl.superview viewWithTag:3];
@@ -355,14 +398,62 @@ static ACW*gWin; static ACH*gHud;
     if(CGRectContainsPoint(self.fab.frame,p))return [super hitTest:p withEvent:e];
     if(gMenu){gMenu=NO;self.panel.hidden=YES;} return nil;
 }
+- (void)layoutForScreen {
+    CGRect b=self.window?self.window.bounds:UIScreen.mainScreen.bounds;
+    // handle landscape: use real window bounds
+    if(!CGRectEqualToRect(self.frame,b)) self.frame=b;
+    CGFloat W=b.size.width, H=b.size.height;
+    CGFloat S=52;
+    // keep fab on right side relative to current size
+    if(self.fab.center.x<10||self.fab.center.x>W-10||self.fab.center.y<10){
+        self.fab.frame=CGRectMake(W-S-14, H*0.45, S, S);
+    }
+    CGFloat pw=fminf(W-20, 560), ph=fminf(H-40, 320);
+    if(W>H){ // landscape — wider panel
+        pw=fminf(W*0.85, 640);
+        ph=fminf(H*0.85, 340);
+    }
+    if(self.panel.hidden || self.panel.bounds.size.width<50){
+        self.panel.frame=CGRectMake((W-pw)/2,(H-ph)/2,pw,ph);
+    }
+    CGFloat sw=130;
+    self.side.frame=CGRectMake(0,0,sw,self.panel.bounds.size.height);
+    self.scroll.frame=CGRectMake(sw,0,self.panel.bounds.size.width-sw,self.panel.bounds.size.height);
+    if(gSecureField) gSecureField.frame=b;
+    if(gSecureContainer) self.frame=gSecureContainer.bounds;
+}
 - (void)boot{
     gReady=YES; LoadCfgNamed(@"default");
     self.link=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
     self.link.preferredFramesPerSecond=60;
     [self.link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    MakeSecure(self); if(gWin)MakeSecure(gWin);
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(orient) name:UIDeviceOrientationDidChangeNotification object:nil];
+    [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+    [self layoutForScreen];
+    ApplyCaptureHide(gWin,self,gHideRec);
 }
-- (void)tick:(CADisplayLink*)l{[self setNeedsDisplay];}
+- (void)orient{
+    dispatch_async(dispatch_get_main_queue(),^{
+        if(gWin){
+            gWin.frame=UIScreen.mainScreen.bounds;
+            [self layoutForScreen];
+            ApplyCaptureHide(gWin,self,gHideRec);
+            if(gMenu)[self rebuild];
+        }
+    });
+}
+- (void)tick:(CADisplayLink*)l{
+    // refresh bounds if game rotated without notification
+    CGRect b=UIScreen.mainScreen.bounds;
+    if(gWin && !CGRectEqualToRect(gWin.frame,b)){
+        gWin.frame=b;
+        [self layoutForScreen];
+    }
+    [self setNeedsDisplay];
+}
+- (void)dealloc{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 @end
 
 static void Start(){
@@ -372,11 +463,19 @@ static void Start(){
         gWin=[[ACW alloc]initWithFrame:b];
         gWin.windowLevel=UIWindowLevelAlert+100;
         gWin.backgroundColor=UIColor.clearColor;
-        UIViewController*r=[UIViewController new]; r.view.backgroundColor=UIColor.clearColor;
+        gWin.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        UIViewController*r=[UIViewController new];
+        r.view.backgroundColor=UIColor.clearColor;
+        r.view.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        // allow all orientations so HUD matches landscape game
+        if([r respondsToSelector:@selector(setModalPresentationStyle:)]){}
         gWin.rootViewController=r;
-        gHud=[[ACH alloc]initWithFrame:b]; [r.view addSubview:gHud];
-        [gWin makeKeyAndVisible]; [gHud boot];
-        NSLog(@"[Astral] ready");
+        gHud=[[ACH alloc]initWithFrame:b];
+        gHud.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        [r.view addSubview:gHud];
+        [gWin makeKeyAndVisible];
+        [gHud boot];
+        NSLog(@"[Astral] ready landscape-aware");
     });
 }
 __attribute__((constructor)) static void onLoad(){
