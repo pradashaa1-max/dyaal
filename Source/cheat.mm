@@ -218,7 +218,7 @@ static ACW*gWin; static ACH*gHud;
     [sw addTarget:self action:@selector(onSw:) forControlEvents:UIControlEventValueChanged]; [c addSubview:sw];
     if(sl){
         UISlider*slid=[[UISlider alloc]initWithFrame:CGRectMake(14,58,w-100,24)];
-        slid.minValue=1; slid.maxValue=30; slid.value=gFov; slid.tag=2;
+        slid.minimumValue=1; slid.maximumValue=30; slid.value=gFov; slid.tag=2;
         slid.minimumTrackTintColor=[UIColor colorWithRed:gAR green:gAG blue:gAB alpha:1];
         [slid addTarget:self action:@selector(onFov:) forControlEvents:UIControlEventValueChanged]; [c addSubview:slid];
         UILabel*lv=[[UILabel alloc]initWithFrame:CGRectMake(w-80,58,66,24)]; lv.tag=3;
